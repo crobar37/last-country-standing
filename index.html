@@ -81,6 +81,61 @@
       }
     }
 
+    // ====== Sound Functions ======
+
+    // Simple beep function for 8-bit style sound
+    function playBeep(freq=440, duration=120, volume=0.1){
+      try {
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const oscillator = audioCtx.createOscillator();
+        const gainNode = audioCtx.createGain();
+
+        oscillator.connect(gainNode);
+        gainNode.connect(audioCtx.destination);
+
+        oscillator.type = 'square'; // 8-bit style wave
+        oscillator.frequency.value = freq;
+        gainNode.gain.value = volume;
+
+        oscillator.start();
+
+        setTimeout(() => {
+          oscillator.stop();
+          audioCtx.close();
+        }, duration);
+      } catch(e){ /* ignore on error */ }
+    }
+
+    // Explosion sound with noise burst
+    function playExplosion(){
+      try {
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const bufferSize = audioCtx.sampleRate;
+        const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+        const data = buffer.getChannelData(0);
+
+        // Fill buffer with white noise
+        for(let i = 0; i < bufferSize; i++) {
+          data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / bufferSize, 2); // fade out
+        }
+
+        const noise = audioCtx.createBufferSource();
+        noise.buffer = buffer;
+
+        const gainNode = audioCtx.createGain();
+        gainNode.gain.setValueAtTime(0.3, audioCtx.currentTime);
+        gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
+
+        noise.connect(gainNode);
+        gainNode.connect(audioCtx.destination);
+
+        noise.start();
+        noise.stop(audioCtx.currentTime + 0.3);
+
+        setTimeout(() => audioCtx.close(), 500);
+      } catch(e){ /* ignore on error */ }
+    }
+
     // ====== Init / Reset ======
     function makeCountryName(base){
       const suf = choice(COUNTRY_STYLES);
@@ -124,6 +179,7 @@
       lastTime = performance.now();
       lastLaunchTime = lastTime;
       nextLaunchDelay = rand(LAUNCH_MIN_MS, LAUNCH_MAX_MS);
+      startBtn.disabled = false;
       draw();
     }
 
@@ -151,6 +207,8 @@
       const speed = 1 / travel; // progress per second
 
       const color = `hsl(${Math.floor(rand(0,360))}deg 70% 60%)`;
+
+      playBeep(600, 80, 0.12); // play launch beep
 
       missiles.push({
         sx, sy, ex, ey, mx, my, progress:0, speed, color, attackerId:attacker.id, targetId:target.id
@@ -189,6 +247,7 @@
           const tx = m.ex;
           const ty = m.ey;
           makeExplosion(tx, ty);
+          playExplosion(); // explosion sound
 
           // mark target dead if alive
           const target = countries.find(c => c.id === m.targetId);
@@ -222,6 +281,7 @@
         const winner = countries.find(c => c.alive);
         const winnerName = winner ? winner.short : null;
         showResults(winnerName);
+        startBtn.disabled = false;
       }
     }
 
@@ -353,7 +413,15 @@
 
     // ====== Controls ======
     resetBtn.addEventListener('click', ()=>{ resetGame(); });
-    startBtn.addEventListener('click', ()=>{ running = true; startBtn.disabled = true; });
+    startBtn.addEventListener('click', ()=>{
+      running = true;
+      startBtn.disabled = true;
+      // Resume AudioContext on user interaction for sound in some browsers
+      if (typeof AudioContext !== 'undefined' && window.audioCtx === undefined) {
+        window.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        window.audioCtx.resume();
+      }
+    });
 
     // ====== Start ======
     initCountries();
