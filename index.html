@@ -46,7 +46,6 @@
     const TRAVEL_MIN_S = 3.6;   // min travel time (seconds)
     const TRAVEL_MAX_S = 6.6;   // max travel time (seconds)
 
-    const MARKER_RADIUS = 10;
     const FONT = '13px monospace';
 
     // ====== State ======
@@ -60,7 +59,7 @@
     let lastLaunchTime = 0;
     let nextLaunchDelay = rand(LAUNCH_MIN_MS, LAUNCH_MAX_MS);
 
-    // Background world map (Mercator projection). We set crossOrigin for safer use.
+    // Background world map (Mercator projection)
     const backgroundImg = new Image();
     backgroundImg.crossOrigin = 'anonymous';
     backgroundImg.src = 'https://upload.wikimedia.org/wikipedia/commons/8/80/World_map_-_low_resolution.svg';
@@ -79,6 +78,60 @@
         x: uu*p0.x + 2*u*t*p1.x + tt*p2.x,
         y: uu*p0.y + 2*u*t*p1.y + tt*p2.y
       }
+    }
+
+    // ====== City Drawing ======
+    // Draws a small cluster of varied rectangular "high rises" at (x,y)
+    // Each country gets a unique seed to vary shapes/colors
+    function drawCity(x, y, seed) {
+      const baseWidth = 20;
+      const baseHeight = 30;
+      const spacing = 5;
+
+      // Simple deterministic pseudo random from seed
+      function prng(s) {
+        let x = Math.sin(s) * 10000;
+        return x - Math.floor(x);
+      }
+
+      ctx.save();
+      ctx.translate(x, y);
+
+      const numBuildings = 4 + Math.floor(prng(seed) * 3); // 4-6 buildings
+      let offsetX = -((numBuildings-1) * (baseWidth + spacing)) / 2;
+
+      for (let i = 0; i < numBuildings; i++) {
+        const h = baseHeight * (0.6 + prng(seed + i) * 1.4); // height varies
+        const w = baseWidth * (0.6 + prng(seed + i * 7) * 0.8); // width varies
+
+        // Color varies from greenish to blueish for diversity
+        const hue = 150 + (prng(seed + i * 13) * 100);
+        const lightness = 40 + prng(seed + i * 17) * 30;
+        ctx.fillStyle = `hsl(${hue}, 70%, ${lightness}%)`;
+
+        ctx.shadowColor = `hsl(${hue}, 80%, 30%)`;
+        ctx.shadowBlur = 3;
+
+        ctx.fillRect(offsetX, -h, w, h);
+
+        // windows (little squares)
+        ctx.fillStyle = `hsl(${hue}, 20%, ${Math.min(lightness+40, 90)}%)`;
+        const rows = 3 + Math.floor(prng(seed + i * 19) * 4);
+        const cols = 2 + Math.floor(prng(seed + i * 23) * 3);
+        const winW = w / (cols * 1.5);
+        const winH = h / (rows * 2.5);
+
+        for(let r=0; r<rows; r++) {
+          for(let c=0; c<cols; c++) {
+            if(prng(seed + r*cols + c + i * 29) > 0.5) {
+              ctx.fillRect(offsetX + c*winW*1.5 + winW/3, -h + r*winH*2 + winH/3, winW, winH);
+            }
+          }
+        }
+
+        offsetX += w + spacing;
+      }
+      ctx.restore();
     }
 
     // ====== Sound Functions ======
@@ -114,9 +167,9 @@
         const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
         const data = buffer.getChannelData(0);
 
-        // Fill buffer with white noise
+        // Fill buffer with white noise fading out
         for(let i = 0; i < bufferSize; i++) {
-          data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / bufferSize, 2); // fade out
+          data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / bufferSize, 2);
         }
 
         const noise = audioCtx.createBufferSource();
@@ -165,7 +218,8 @@
             name: makeCountryName(PLAYERS[index]),
             short: PLAYERS[index],
             x, y,
-            alive: true
+            alive: true,
+            seed: index * 97 + 41 // unique seed for city drawing variation
           });
           index++;
         }
@@ -211,226 +265,4 @@
       playBeep(600, 80, 0.12); // play launch beep
 
       missiles.push({
-        sx, sy, ex, ey, mx, my, progress:0, speed, color, attackerId:attacker.id, targetId:target.id
-      });
-    }
 
-    function makeExplosion(x,y){
-      const parts = [];
-      const count = 18;
-      for (let i=0;i<count;i++){
-        const ang = rand(0, Math.PI*2);
-        const sp = rand(40,160); // px per second
-        parts.push({x,y,ang,sp,vx:Math.cos(ang)*sp,vy:Math.sin(ang)*sp,life:rand(0.6,1.6)});
-      }
-      explosions.push({x,y,time:0,parts});
-    }
-
-    // ====== Update / Draw ======
-    function update(dt, now){
-      if (!running) return;
-
-      // Launch control
-      if (now - lastLaunchTime > nextLaunchDelay){
-        const pick = pickAttackerAndTarget();
-        if (pick) launchMissile(pick.attacker, pick.target);
-        lastLaunchTime = now;
-        nextLaunchDelay = rand(LAUNCH_MIN_MS, LAUNCH_MAX_MS);
-      }
-
-      // Update missiles (iterate backwards — we may remove items)
-      for (let i = missiles.length - 1; i >= 0; i--){
-        const m = missiles[i];
-        m.progress += m.speed * dt;
-        if (m.progress >= 1){
-          // Hit!
-          const tx = m.ex;
-          const ty = m.ey;
-          makeExplosion(tx, ty);
-          playExplosion(); // explosion sound
-
-          // mark target dead if alive
-          const target = countries.find(c => c.id === m.targetId);
-          if (target && target.alive){
-            target.alive = false;
-            eliminated.push(target.short);
-          }
-          missiles.splice(i,1);
-        }
-      }
-
-      // Update explosions
-      for (let i = explosions.length - 1; i >= 0; i--){
-        const e = explosions[i];
-        e.time += dt;
-        // update particles
-        e.parts.forEach(p => {
-          p.x += p.vx * dt;
-          p.y += p.vy * dt;
-          // slow down
-          p.vx *= (1 - dt*1.2);
-          p.vy *= (1 - dt*1.2);
-        });
-        if (e.time > 1.6) explosions.splice(i,1);
-      }
-
-      // Check game over
-      const aliveCount = countries.filter(c => c.alive).length;
-      if (aliveCount <= 1 && running){
-        running = false;
-        const winner = countries.find(c => c.alive);
-        const winnerName = winner ? winner.short : null;
-        showResults(winnerName);
-        startBtn.disabled = false;
-      }
-    }
-
-    function draw(){
-      ctx.clearRect(0,0,canvas.width,canvas.height);
-      // draw background map if loaded or a subtle grid
-      if (bgLoaded){
-        ctx.drawImage(backgroundImg, 0, 0, canvas.width, canvas.height);
-        // dark overlay for contrast
-        ctx.fillStyle = 'rgba(0,0,0,0.28)';
-        ctx.fillRect(0,0,canvas.width,canvas.height);
-      } else {
-        // fallback background
-        ctx.fillStyle = '#001';
-        ctx.fillRect(0,0,canvas.width,canvas.height);
-      }
-
-      // draw missile arcs (faint curves) then moving projectiles
-      missiles.forEach(m => {
-        // faint full arc path
-        ctx.save();
-        ctx.globalAlpha = 0.22;
-        ctx.strokeStyle = m.color;
-        ctx.lineWidth = 2.4;
-        ctx.beginPath();
-        ctx.moveTo(m.sx, m.sy);
-        ctx.quadraticCurveTo(m.mx, m.my, m.ex, m.ey);
-        ctx.stroke();
-        ctx.restore();
-
-        // current position
-        const p = quadraticPoint({x:m.sx,y:m.sy},{x:m.mx,y:m.my},{x:m.ex,y:m.ey}, Math.max(0, Math.min(1,m.progress)));
-
-        // glowing projectile
-        ctx.save();
-        ctx.shadowColor = m.color;
-        ctx.shadowBlur = 18;
-        ctx.fillStyle = '#ffd';
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, 6, 0, Math.PI*2);
-        ctx.fill();
-        ctx.restore();
-
-        // small spark
-        ctx.fillStyle = m.color;
-        ctx.fillRect(p.x-1.5, p.y-1.5, 3,3);
-      });
-
-      // draw explosions (particles + ring)
-      explosions.forEach(e => {
-        // ring
-        const alpha = 1 - (e.time / 1.6);
-        ctx.save();
-        ctx.globalAlpha = 0.8 * alpha;
-        const r = 12 + e.time * 90;
-        ctx.beginPath();
-        ctx.strokeStyle = `rgba(255,230,140,${0.9*alpha})`;
-        ctx.lineWidth = 2 + (1-alpha)*4;
-        ctx.arc(e.x, e.y, r, 0, Math.PI*2);
-        ctx.stroke();
-        ctx.restore();
-
-        // particles
-        e.parts.forEach(p => {
-          ctx.save();
-          ctx.globalAlpha = Math.max(0, 1 - (e.time / p.life));
-          ctx.fillStyle = 'orange';
-          ctx.fillRect(p.x-2, p.y-2, 4,4);
-          ctx.restore();
-        });
-      });
-
-      // draw countries/markers and names
-      ctx.font = FONT;
-      ctx.textBaseline = 'bottom';
-      countries.forEach(c => {
-        // marker
-        ctx.beginPath();
-        ctx.fillStyle = c.alive ? 'lime' : 'gray';
-        ctx.arc(c.x, c.y, MARKER_RADIUS, 0, Math.PI*2);
-        ctx.fill();
-
-        // name with subtle halo for legibility
-        const text = c.name;
-        const tw = ctx.measureText(text).width;
-        const tx = c.x - tw/2;
-        const ty = c.y - MARKER_RADIUS - 8;
-        // background for text
-        ctx.fillStyle = 'rgba(0,0,0,0.6)';
-        ctx.fillRect(tx-6, ty-16, tw+12, 20);
-        ctx.fillStyle = '#fff';
-        ctx.fillText(text, tx, ty);
-      });
-
-      // HUD - live count
-      const alive = countries.filter(c=>c.alive).length;
-      ctx.fillStyle = 'rgba(0,0,0,0.6)';
-      ctx.fillRect(12,12,180,36);
-      ctx.fillStyle = '#fff';
-      ctx.font = '14px monospace';
-      ctx.fillText(`Alive: ${alive}   Missiles: ${missiles.length}`, 20, 36);
-    }
-
-    function showResults(winnerShort){
-      // Build draft order: winner first, then eliminated in reverse order (last eliminated highest pick)
-      const order = [];
-      if (winnerShort) order.push(winnerShort);
-      const reversed = eliminated.slice().reverse();
-      reversed.forEach(n => order.push(n));
-
-      // if some remaining (shouldn't), append
-      const others = countries.filter(c => !order.includes(c.short)).map(c => c.short);
-      others.forEach(o => order.push(o));
-
-      // show overlay
-      overlay.innerHTML = `<h2>Draft Order</h2><div style="text-align:left;margin-top:8px">${order.map((n,i)=>`<div>${i+1}. ${n}</div>`).join('')}</div><div style="margin-top:10px;text-align:center"><button id=closeBtn>Close</button></div>`;
-      overlay.style.display = 'block';
-      document.getElementById('closeBtn').onclick = ()=>{ overlay.style.display='none'; }
-    }
-
-    // ====== Main loop ======
-    function frame(now){
-      const dt = Math.min(0.033, (now - lastTime) / 1000); // cap dt for stability (max ~33ms)
-      update(dt, now);
-      draw();
-      lastTime = now;
-      requestAnimationFrame(frame);
-    }
-
-    // ====== Controls ======
-    resetBtn.addEventListener('click', ()=>{ resetGame(); });
-    startBtn.addEventListener('click', ()=>{
-      running = true;
-      startBtn.disabled = true;
-      // Resume AudioContext on user interaction for sound in some browsers
-      if (typeof AudioContext !== 'undefined' && window.audioCtx === undefined) {
-        window.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        window.audioCtx.resume();
-      }
-    });
-
-    // ====== Start ======
-    initCountries();
-    lastTime = performance.now();
-    requestAnimationFrame(frame);
-
-    // expose a simple API in case you want to programmatically start/reset from console
-    window.LCS = {reset: resetGame, start: ()=>{running=true}, countries, missiles, explosions};
-  })();
-  </script>
-</body>
-</html>
